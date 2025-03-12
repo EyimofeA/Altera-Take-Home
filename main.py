@@ -1,7 +1,7 @@
 import transformers as tr
 import torch
 from contextlib import nullcontext
-
+from transformers import DynamicCache
 # Define model paths.
 amateur_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
 expert_path = "Qwen/Qwen2.5-3B-Instruct"
@@ -62,9 +62,10 @@ def contrastive_generation(amateur: tr.PreTrainedModel, expert: tr.PreTrainedMod
             # Expert model always uses cached context.
             expert_out = expert(last_token, past_key_values=past_expert, use_cache=True)
             
-            # Update caches.
-            past_amateur = amateur_out.past_key_values
-            past_expert = expert_out.past_key_values
+            # Update caches: convert the legacy output caches to the new DynamicCache format.
+            past_amateur = DynamicCache.from_legacy_cache(amateur_out.past_key_values)
+            past_expert = DynamicCache.from_legacy_cache(expert_out.past_key_values)
+
 
             # Apply temperature scaling on amateur logits.
             amateur_logits = amateur_out.logits[:, -1, :] / temperature
