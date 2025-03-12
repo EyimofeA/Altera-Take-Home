@@ -45,7 +45,7 @@ def contrastive_generation(amateur: tr.PreTrainedModel, expert: tr.PreTrainedMod
 
     # Use mixed precision when on CUDA.
     device = generated_tokens.device
-    autocast_context = torch.cuda.amp.autocast() if device.type == "cuda" else nullcontext()
+    autocast_context = torch.amp.autocast('cuda') if device.type == "cuda" else nullcontext()
 
     for _ in range(max_tokens):
         with torch.no_grad(), autocast_context:
@@ -145,12 +145,13 @@ def main():
 		expert_model.half()
 		
 	# Compile models using torch.compile for further performance improvements (requires PyTorch 2.0+)
-	if hasattr(torch, "compile"):
+	use_compile = False #torch compile might not work out of the box so its disabled by default
+	if use_compile and hasattr(torch, "compile"):
 		amateur_model = torch.compile(amateur_model)
 		expert_model = torch.compile(expert_model)
 
 	print("Generating output...\n")
-	output = contrastive_generation(amateur_model, expert_model, prompt, max_tokens=20)
+	output = contrastive_generation(amateur_model, expert_model, prompt, max_tokens=1000)
 	print("Generated Text:\n", output)
 
 if __name__ == "__main__":
