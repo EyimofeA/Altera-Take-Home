@@ -7,55 +7,62 @@ expert_path = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 tokenizer = tr.AutoTokenizer.from_pretrained(amateur_path)
 
 
-def contrastive_generation(amateur, expert, prompt, max_tokens, alpha=0.1) -> str:
-    """
-    Implements contrastive decoding (https://arxiv.org/abs/2210.15097) at token-level granularity.
+def contrastive_generation(amateur, expert, prompt, max_tokens, alpha=0.1,temperature =1.0,ablation = False) -> str:
+	"""
+	Implements contrastive decoding (https://arxiv.org/abs/2210.15097) at token-level granularity.
 
-    Args:
-                    amateur: The smaller (amateur) model to penalize undesirable token behaviors.
-                    expert: The larger model providing high-quality logits.
-                    prompt (str): Input text to initiate generation.
-                    max_tokens (int): Maximum number of tokens to generate.
+	Args:
+					amateur: The smaller (amateur) model to penalize undesirable token behaviors.
+					expert: The larger model providing high-quality logits.
+					prompt (str): Input text to initiate generation.
+					max_tokens (int): Maximum number of tokens to generate.
 
-    Returns:
-                    str: The generated continuation text.
-    """
+	Returns:
+					str: The generated continuation text.
+	"""
 
-    inputs = tokenizer(prompt, return_tensors="pt")
-    generated_tokens = inputs["input_ids"].to(amateur.device)
+	inputs = tokenizer(prompt, return_tensors="pt")
+	input_ids = inputs["input_ids"]
+	generated_tokens = input_ids.to(amateur.device)
 
-    amateur.eval()
-    expert.eval()
+	amateur.eval()
+	expert.eval()
 
-    for _ in range(max_tokens):
-        with torch.no_grad():
-            amateur_logits = amateur(generated_tokens).logits[:, -1, :]
-            expert_logits = expert(generated_tokens).logits[:, -1, :]
+	for _ in range(max_tokens):
+		with torch.no_grad():
+			if ablation:
+				amateur_logits = amateur(generated_tokens[:, -1].unsqueeze(0)).logits[:, -1, :]
+			else:
+				amateur_logits = amateur(generated_tokens).logits[:, -1, :]
+			expert_logits = expert(generated_tokens).logits[:, -1, :]
+			# Temperature scaling
+			amateur_logits = amateur_probs/temperature
 
-            amateur_probs = torch.softmax(amateur_logits, dim=-1)
-            expert_probs = torch.softmax(expert_logits, dim=-1)
+			amateur_probs = torch.softmax(amateur_logits, dim=-1)
+			expert_probs = torch.softmax(expert_logits, dim=-1)
+			
 
-            # Apply plausibility constraint (V_head)
-            max_expert_prob = torch.max(expert_probs)
-            plausible_tokens_mask = expert_probs >= (alpha * max_expert_prob)
+			# Apply plausibility constraint (V_head)
+			max_expert_prob = torch.max(expert_probs)
+			plausible_tokens_mask = expert_probs >= (alpha * max_expert_prob)
 
-            # Compute contrastive logits as the difference in log probabilities
-            expert_log_probs = torch.log(expert_probs + 1e-10)  # Add small epsilon to avoid log(0)
-            amateur_log_probs = torch.log(amateur_probs + 1e-10)
-            contrastive_scores = expert_log_probs - amateur_log_probs
+			# Compute contrastive logits as the difference in log probabilities
+			expert_log_probs = torch.log(expert_probs + 1e-10)  # Add small epsilon to avoid log(0)
+			amateur_log_probs = torch.log(amateur_probs + 1e-10)
+			contrastive_scores = expert_log_probs - amateur_log_probs
 
-            # Set scores for implausible tokens to -inf
-            contrastive_scores[~plausible_tokens_mask] = float("-inf")
+			# Set scores for implausible tokens to -inf
+			contrastive_scores[~plausible_tokens_mask] = float("-inf")
 
-            next_token_id = torch.argmax(contrastive_scores, dim=-1, keepdim=True)
-            generated_tokens = torch.cat([generated_tokens, next_token_id], dim=1)
+			next_token_id = torch.argmax(contrastive_scores, dim=-1, keepdim=True)
+			generated_tokens = torch.cat([generated_tokens, next_token_id], dim=1)
 
-            # Break if EOS token is generated
-            if next_token_id.item() == tokenizer.eos_token_id:
-                break
+			# Break if EOS token is generated
+			if next_token_id.item() == tokenizer.eos_token_id:
+				break
 
-    # Decode the token ids to string while skipping special tokens
-    return tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
+	# Decode the token ids to string while skipping special tokens
+	return tokenizer.decode(generated_tokens[0][len(input_ids):], skip_special_tokens=True)
 
 
 def main():
