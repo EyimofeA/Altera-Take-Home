@@ -7,18 +7,18 @@ expert_path = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 tokenizer = tr.AutoTokenizer.from_pretrained(amateur_path)
 
 
-def contrastive_generation(amateur, expert, prompt, max_tokens) -> str:
+def contrastive_generation(amateur, expert, prompt, max_tokens, alpha=0.1) -> str:
     """
     Implements contrastive decoding (https://arxiv.org/abs/2210.15097) at token-level granularity.
 
     Args:
-            amateur: The smaller (amateur) model to penalize undesirable token behaviors.
-            expert: The larger model providing high-quality logits.
-            prompt (str): Input text to initiate generation.
-            max_tokens (int): Maximum number of tokens to generate.
+                    amateur: The smaller (amateur) model to penalize undesirable token behaviors.
+                    expert: The larger model providing high-quality logits.
+                    prompt (str): Input text to initiate generation.
+                    max_tokens (int): Maximum number of tokens to generate.
 
     Returns:
-            str: The generated continuation text.
+                    str: The generated continuation text.
     """
 
     inputs = tokenizer(prompt, return_tensors="pt")
@@ -35,17 +35,20 @@ def contrastive_generation(amateur, expert, prompt, max_tokens) -> str:
             amateur_probs = torch.softmax(amateur_logits, dim=-1)
             expert_probs = torch.softmax(expert_logits, dim=-1)
 
+            # Apply plausibility constraint (V_head)
+            max_expert_prob = torch.max(expert_probs)
+            plausible_tokens_mask = expert_probs >= (alpha * max_expert_prob)
+
             # Compute contrastive logits as the difference in log probabilities
-            expert_log_probs = torch.log(
-                expert_probs + 1e-10
-            )  # Add small epsilon to avoid log(0)
+            expert_log_probs = torch.log(expert_probs + 1e-10)  # Add small epsilon to avoid log(0)
             amateur_log_probs = torch.log(amateur_probs + 1e-10)
             contrastive_scores = expert_log_probs - amateur_log_probs
 
-            next_token_id = torch.argmax(contrastive_scores, dim=-1)
-            generated_tokens = torch.cat(
-                [generated_tokens, next_token_id.unsqueeze(0)], dim=1
-            )
+            # Set scores for implausible tokens to -inf
+            contrastive_scores[~plausible_tokens_mask] = float("-inf")
+
+            next_token_id = torch.argmax(contrastive_scores, dim=-1, keepdim=True)
+            generated_tokens = torch.cat([generated_tokens, next_token_id], dim=1)
 
             # Break if EOS token is generated
             if next_token_id.item() == tokenizer.eos_token_id:
@@ -88,11 +91,11 @@ def main():
         add_generation_prompt=True,
         tokenize=False,
     )
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "mps" if torch.mps.is_available() else "cpu"
     amateur_model = tr.AutoModelForCausalLM.from_pretrained(amateur_path).to(device)
     expert_model = tr.AutoModelForCausalLM.from_pretrained(expert_path).to(device)
     print("Generating output...\n")
-    output = contrastive_generation(amateur_model, expert_model, prompt, max_tokens=256)
+    output = contrastive_generation(amateur_model, expert_model, prompt, max_tokens=20)
     print("Generated Text:\n", output)
 
 
